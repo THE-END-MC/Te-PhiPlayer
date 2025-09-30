@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Te:PhiPlayer</title>
+    <title>Te:PhiPlayer 1.0.1</title>
     <style>
         @font-face{font-family:'PhigrosFont';src:url('font.ttf') format('truetype');font-weight:normal;font-style:normal;}
         body{background-color:#2a2d3e;color:white;text-align:center;font-family:'PhigrosFont',Arial,sans-serif;margin:0;padding:20px;}
@@ -39,23 +39,19 @@
         
         <div class="player-section">
             <div class="controls">
-                <button onclick="start()">播放，启动！！！</button>
+                <button onclick="start()">播放</button>
                 <button id="pauseBtn" onclick="pause()">暂停</button>
                 <button onclick="reset()">重开</button>
-                <button onclick="exIt()">退了不玩了</button><br>
+                <button onclick="exIt()">退出</button><br>
                 <div class="time-display" id="timeDisplay">00:00.000</div>
-                <div class="slider-container"><label for="speedControl">流速倍率:</label><input type="range" id="speedControl" min="0.1" max="5" step="0.1" value="1"><span id="speedValue">1.0</span></div>
-                <div class="slider-container"><label for="noteSizeControl">Note大小:</label><input type="range" id="noteSizeControl" min="50" max="150" step="5" value="75"><span id="noteSizeValue">75%</span></div>
+                <div class="time-display" id="hitNoteDisplay">已过线Note: 0</div>
+                <div class="slider-container"><label>流速:</label><input type="range" id="speedControl" min="1" max="10" step="0.1" value="1"><span id="speedValue">1.0</span></div>
+                <div class="slider-container"><label>大小:</label><input type="range" id="noteSizeControl" min="50" max="150" step="5" value="75"><span id="noteSizeValue">75%</span></div>
             </div>
             <div id="playerContainer">
                 <canvas id="player" width="720" height="540"></canvas>
-                <button id="fullscreenBtn" onclick="toggleFullscreen()">全屏显示</button>
+                <button id="fullscreenBtn" onclick="toggleFullscreen()">全屏</button>
             </div>
-        </div>
-        
-        <div class="credits">
-            <h1>致谢名单</h1><p>1. 我自己和我的键盘<br>2. Sublime Text<br>3. GitHub Pages</p>
-            <h1>不谢名单</h1><p>1. 反初音未来（QQ2716692964）<br>2. QAQfei</p>
         </div>
     </div>
 
@@ -64,16 +60,12 @@
 
     <script>
         // 配置
-        const BASE_SPEED = 1200; // 每秒下落1200px
-        const CANVAS_WIDTH = 1920;
-        const CANVAS_HEIGHT = 1080;
-
-        // Note材质配置
+        const BASE_SPEED = 1200;
         const NOTE_TEXTURES = {
-            1: { single: 'Tap.png', double: 'Tap2.png' },     // Tap
-            2: { single: 'Hold.png', double: 'Hold2.png' },   // Hold  
-            3: { single: 'Flick.png', double: 'Flick2.png' }, // Flick
-            4: { single: 'Drag.png', double: 'Drag2.png' }    // Drag
+            1: { single: 'Tap.png', double: 'Tap2.png' },
+            2: { single: 'Hold.png', double: 'Hold2.png' },  
+            3: { single: 'Flick.png', double: 'Flick2.png' },
+            4: { single: 'Drag.png', double: 'Drag2.png' }
         };
 
         // 全局变量
@@ -81,76 +73,53 @@
         let animationFrameId = null, speedMultiplier = 1, noteSizeFactor = 0.75;
         let ChartJSON = {}, chartContent = null, audioFile = null;
         let renderer = null, audioElement = null;
+        let hitNoteCount = 0;
+        let isInitialized = false;
+        let chartData = null;
 
-        // 缓存变量
-        let lastRenderTime = 0;
-        const frameRate = 60; // 限制帧率
-        const frameInterval = 1000 / frameRate;
-
-        // 预加载的图片
+        // 材质
         const noteTextures = {};
         const judgeLineTextures = {};
 
         class PhigrosRenderer {
             constructor(canvas) {
                 this.canvas = canvas;
-                this.ctx = canvas.getContext('2d');
+                this.ctx = canvas.getContext('2d', { alpha: false });
                 this.canvas.width = 720;
                 this.canvas.height = 540;
-                
                 this.chartData = null;
                 this.noteSize = 75;
-                
-                // 性能优化：缓存常用计算
-                this.canvasHalfWidth = this.canvas.width / 2;
-                this.canvasHalfHeight = this.canvas.height / 2;
-                
-                console.log("渲染器初始化完成");
+                this.transformXFactor = this.canvas.width / 1350;
+                this.transformYFactor = this.canvas.height / 900;
+                this.canvasHeight = this.canvas.height;
             }
 
-            // 坐标转换（基于1920x1080）- 优化版本
-            transformX(x) {
-                return (x + 675) * (this.canvas.width / 1350);
-            }
+            transformX(x) { return (x + 675) * this.transformXFactor; }
+            transformY(y) { return this.canvasHeight - (y + 450) * this.transformYFactor; }
 
-            transformY(y) {
-                return this.canvas.height - (y + 450) * (this.canvas.height / 900);
-            }
-
-            // 事件值计算 - 添加缓存优化
             calculateEventValue(events, time, defaultValue) {
-                if (!events || !Array.isArray(events) || events.length === 0) return defaultValue;
-                
+                if (!events || events.length === 0) return defaultValue;
                 let result = defaultValue;
-                
-                for (const event of events) {
+                for (let i = 0; i < events.length; i++) {
+                    const event = events[i];
                     if (time >= event.startTime) {
                         if (time <= event.endTime) {
-                            // 事件进行中
                             const progress = (time - event.startTime) / (event.endTime - event.startTime);
                             const eased = this.easing(event.easingType || 1, progress);
-                            
                             if (Array.isArray(event.start)) {
                                 result = event.start.map((s, i) => s + (event.end[i] - s) * eased);
                             } else {
                                 result = event.start + (event.end - event.start) * eased;
                             }
                         } else {
-                            // 事件已结束，使用最终值
-                            if (Array.isArray(event.end)) {
-                                result = [...event.end];
-                            } else {
-                                result = event.end;
-                            }
+                            result = Array.isArray(event.end) ? [...event.end] : event.end;
                         }
                     }
                 }
-                
                 return result;
             }
 
             easing(type, t) {
-                // 使用查表法优化常用缓动函数
                 switch(type) {
                     case 1: return t;
                     case 2: return t * t;
@@ -160,309 +129,286 @@
                 }
             }
 
-            // 判定线属性计算 - 优化文本处理
-            getJudgeLineProperties(judgeLine, time) {
-                const props = {
+            getJudgeLinePropertiesWithParent(judgeLine, time, parentProps = null) {
+                let props = {
                     x: 0, y: 0, rotation: 0, alpha: 255,
                     scaleX: 1, scaleY: 1, speed: 1,
                     color: [255, 255, 255],
                     anchorX: 0.5, anchorY: 0.5,
                     text: null, textColor: "#ffffff",
-                    texture: null
+                    texture: null,
+                    parentRotation: 0
                 };
 
                 if (!judgeLine) return props;
+                if (parentProps) {
+                    props.x = parentProps.x;
+                    props.y = parentProps.y;
+                    props.rotation = parentProps.rotation;
+                    props.parentRotation = parentProps.rotation + (parentProps.parentRotation || 0);
+                    props.alpha = parentProps.alpha;
+                    props.scaleX = parentProps.scaleX;
+                    props.scaleY = parentProps.scaleY;
+                    props.speed = parentProps.speed;
+                    props.color = [...parentProps.color];
+                }
 
-                // 事件层
                 if (judgeLine.eventLayers) {
-                    for (const layer of judgeLine.eventLayers) {
-                        if (layer?.moveXEvents) props.x = this.calculateEventValue(layer.moveXEvents, time, props.x);
-                        if (layer?.moveYEvents) props.y = this.calculateEventValue(layer.moveYEvents, time, props.y);
-                        if (layer?.rotateEvents) props.rotation = this.calculateEventValue(layer.rotateEvents, time, props.rotation);
+                    for (let i = 0; i < judgeLine.eventLayers.length; i++) {
+                        const layer = judgeLine.eventLayers[i];
+                        if (layer?.moveXEvents) props.x += this.calculateEventValue(layer.moveXEvents, time, 0);
+                        if (layer?.moveYEvents) props.y += this.calculateEventValue(layer.moveYEvents, time, 0);
+                        if (layer?.rotateEvents) props.rotation += this.calculateEventValue(layer.rotateEvents, time, 0);
                         if (layer?.alphaEvents) props.alpha = this.calculateEventValue(layer.alphaEvents, time, props.alpha);
                         if (layer?.speedEvents) props.speed = this.calculateEventValue(layer.speedEvents, time, props.speed);
                     }
                 }
 
-                // 扩展属性
                 if (judgeLine.extended) {
                     const ext = judgeLine.extended;
-                    if (ext.scaleXEvents) props.scaleX = this.calculateEventValue(ext.scaleXEvents, time, 1);
-                    if (ext.scaleYEvents) props.scaleY = this.calculateEventValue(ext.scaleYEvents, time, 1);
+                    if (ext.scaleXEvents) props.scaleX = this.calculateEventValue(ext.scaleXEvents, time, props.scaleX);
+                    if (ext.scaleYEvents) props.scaleY = this.calculateEventValue(ext.scaleYEvents, time, props.scaleY);
                     if (ext.anchorEvents) {
-                        const anchor = this.calculateEventValue(ext.anchorEvents, time, [0.5, 0.5]);
-                        if (Array.isArray(anchor)) {
-                            props.anchorX = anchor[0];
-                            props.anchorY = anchor[1];
-                        }
+                        const anchor = this.calculateEventValue(ext.anchorEvents, time, [props.anchorX, props.anchorY]);
+                        if (Array.isArray(anchor)) { props.anchorX = anchor[0]; props.anchorY = anchor[1]; }
                     }
                     if (ext.colorEvents) {
-                        const color = this.calculateEventValue(ext.colorEvents, time, [255, 255, 255]);
+                        const color = this.calculateEventValue(ext.colorEvents, time, props.color);
                         if (Array.isArray(color)) props.color = color;
                     }
+                    // 文字事件处理
                     if (ext.textEvents && ext.textEvents.length > 0) {
-                        // 找到当前时间对应的文本事件 - 优化查找逻辑
                         let currentTextEvent = null;
-                        for (const event of ext.textEvents) {
-                            if (time >= event.startTime && time <= event.endTime) {
-                                currentTextEvent = event;
-                                break;
-                            } else if (time > event.endTime) {
-                                // 记录最后一个结束的事件
-                                if (!currentTextEvent || event.endTime > currentTextEvent.endTime) {
+                        let lastValidEvent = null;
+                        
+                        for (let i = 0; i < ext.textEvents.length; i++) {
+                            const event = ext.textEvents[i];
+                            if (time >= event.startTime) {
+                                if (time <= event.endTime) {
                                     currentTextEvent = event;
+                                    break;
+                                } else {
+                                    lastValidEvent = event;
                                 }
                             }
                         }
                         
                         if (currentTextEvent) {
-                            if (time <= currentTextEvent.endTime) {
-                                // 事件进行中 - 文本实时变化
-                                const progress = (time - currentTextEvent.startTime) / (currentTextEvent.endTime - currentTextEvent.startTime);
-                                const eased = this.easing(currentTextEvent.easingType || 1, progress);
-                                
-                                if (Array.isArray(currentTextEvent.start)) {
-                                    props.text = currentTextEvent.start.map((s, i) => 
-                                        s + (currentTextEvent.end[i] - s) * eased
-                                    ).join('');
-                                } else {
-                                    props.text = currentTextEvent.start + (currentTextEvent.end - currentTextEvent.start) * eased;
-                                }
-                            } else {
-                                // 事件已结束，使用最终值
-                                props.text = Array.isArray(currentTextEvent.end) ? 
-                                    currentTextEvent.end.join('') : currentTextEvent.end;
-                            }
+                            const progress = (time - currentTextEvent.startTime) / (currentTextEvent.endTime - currentTextEvent.startTime);
+                            const eased = this.easing(currentTextEvent.easingType || 1, progress);
                             
+                            if (Array.isArray(currentTextEvent.start)) {
+                                props.text = currentTextEvent.start.map((s, i) => {
+                                    const startStr = String(s);
+                                    const endStr = String(currentTextEvent.end[i]);
+                                    return eased < 0.5 ? startStr : endStr;
+                                }).join('');
+                            } else {
+                                const startStr = String(currentTextEvent.start);
+                                const endStr = String(currentTextEvent.end);
+                                props.text = eased < 0.5 ? startStr : endStr;
+                            }
+                            props.textColor = `rgb(${props.color[0]}, ${props.color[1]}, ${props.color[2]})`;
+                        } else if (lastValidEvent) {
+                            // 文字事件结束后保留最后的文字
+                            props.text = Array.isArray(lastValidEvent.end) ? 
+                                lastValidEvent.end.join('') : 
+                                String(lastValidEvent.end);
                             props.textColor = `rgb(${props.color[0]}, ${props.color[1]}, ${props.color[2]})`;
                         }
                     }
                 }
 
-                // 判定线材质
-                if (judgeLine.Texture) {
-                    props.texture = judgeLineTextures[judgeLine.Texture];
-                }
-
+                if (judgeLine.Texture) props.texture = judgeLineTextures[judgeLine.Texture];
                 if (judgeLine.bpmfactor) props.speed /= judgeLine.bpmfactor;
                 props.alpha = Math.max(0, Math.min(255, props.alpha));
-
                 return props;
             }
 
-            // 判定线渲染 - 优化性能
-            renderJudgeLine(judgeLine, time) {
+            renderJudgeLine(judgeLine, time, parentProps = null) {
                 if (!judgeLine) return;
-
-                const props = this.getJudgeLineProperties(judgeLine, time);
+                const props = this.getJudgeLinePropertiesWithParent(judgeLine, time, parentProps);
                 
-                // 判定线透明度小于0时不渲染
-                if (props.alpha < 0) return;
+                // linealpha < 0 时不渲染判定线，但仍然渲染note
+                if (props.alpha <= 0) {
+                    // 只渲染note，不渲染判定线
+                    this.renderNotesOnly(judgeLine, time, parentProps);
+                    return;
+                }
 
                 this.ctx.save();
                 this.ctx.globalAlpha = props.alpha / 255;
-
                 const x = this.transformX(props.x);
                 const y = this.transformY(props.y);
-
                 this.ctx.translate(x, y);
-                this.ctx.rotate(props.rotation * Math.PI / 180);
+                this.ctx.rotate((props.rotation + props.parentRotation) * Math.PI / 180);
 
-                // 判定线尺寸
-                const width = 2000 * props.scaleX;
-                const height = 10 * props.scaleY;
+                // 只有当没有文字时才渲染判定线图形
+                if (!props.text) {
+                    const width = 2000 * props.scaleX;
+                    const height = 10 * props.scaleY;
+                    const anchorOffsetX = width * (0.5 - props.anchorX);
+                    const anchorOffsetY = height * (0.5 - props.anchorY);
 
-                // 应用锚点偏移
-                const anchorOffsetX = width * (0.5 - props.anchorX);
-                const anchorOffsetY = height * (0.5 - props.anchorY);
-
-                // 渲染判定线材质
-                if (props.texture && props.texture.complete && props.texture.width > 0) {
-                    if (props.scaleX === 1 && props.scaleY === 1) {
-                        // 没有缩放：使用材质最中间的一个像素铺满屏幕
-                        const centerX = Math.floor(props.texture.width / 2);
-                        const centerY = Math.floor(props.texture.height / 2);
-                        
-                        // 获取中心像素颜色
-                        const tempCanvas = document.createElement('canvas');
-                        tempCanvas.width = 1;
-                        tempCanvas.height = 1;
-                        const tempCtx = tempCanvas.getContext('2d');
-                        tempCtx.drawImage(props.texture, centerX, centerY, 1, 1, 0, 0, 1, 1);
-                        
-                        const imageData = tempCtx.getImageData(0, 0, 1, 1);
-                        const color = `rgba(${imageData.data[0]}, ${imageData.data[1]}, ${imageData.data[2]}, ${imageData.data[3] / 255})`;
-                        
-                        this.ctx.fillStyle = color;
-                        this.ctx.fillRect(-this.canvas.width, -this.canvas.height, this.canvas.width * 2, this.canvas.height * 2);
+                    if (props.texture && props.texture.complete) {
+                        let textureWidth = props.texture.width * props.scaleX;
+                        let textureHeight = props.texture.height * props.scaleY;
+                        if (judgeLine.Texture !== 'line.png') { textureWidth /= 2; textureHeight /= 2; }
+                        this.ctx.drawImage(props.texture, -textureWidth/2 - anchorOffsetX, -textureHeight/2 - anchorOffsetY, textureWidth, textureHeight);
                     } else {
-                        // 有缩放：按照缩放后的材质大小显示
-                        const textureWidth = props.texture.width * props.scaleX;
-                        const textureHeight = props.texture.height * props.scaleY;
-                        
-                        this.ctx.drawImage(props.texture, 
-                            -textureWidth/2 - anchorOffsetX, 
-                            -textureHeight/2 - anchorOffsetY, 
-                            textureWidth, 
-                            textureHeight);
-                    }
-                } else {
-                    // 没有材质或材质加载失败：绘制普通判定线
-                    if (!props.text) {
                         this.ctx.fillStyle = `rgb(${props.color[0]}, ${props.color[1]}, ${props.color[2]})`;
                         this.ctx.fillRect(-width/2 - anchorOffsetX, -height/2 - anchorOffsetY, width, height);
                     }
                 }
 
-                // 绘制文字（文本可以实时变化）
+                // 渲染文字
                 if (props.text) {
                     this.ctx.save();
-                    this.ctx.translate(anchorOffsetX, anchorOffsetY);
-                    
                     this.ctx.fillStyle = props.textColor;
                     this.ctx.font = '20px PhigrosFont';
                     this.ctx.textAlign = 'center';
                     this.ctx.textBaseline = 'middle';
                     this.ctx.fillText(props.text, 0, -20);
-                    
                     this.ctx.restore();
                 }
 
                 this.ctx.restore();
+
+                // 渲染子判定线
+                if (judgeLine.judgeLineList) {
+                    for (let i = 0; i < judgeLine.judgeLineList.length; i++) {
+                        this.renderJudgeLine(judgeLine.judgeLineList[i], time, props);
+                    }
+                }
+
+                // 渲染note
+                this.renderNotes(judgeLine, time, parentProps);
             }
 
-            // 检查Note是否应该显示 - 优化性能
-            //VGU6UGhpUGxheWVy
-            shouldNoteBeVisible(note, judgeProps, time) {
-                // 快速检查
-                if (judgeProps.alpha < 0) return false;
+            renderNotesOnly(judgeLine, time, parentProps = null) {
+                if (!judgeLine) return;
+                const props = this.getJudgeLinePropertiesWithParent(judgeLine, time, parentProps);
                 
+                // 渲染当前判定线的note
+                this.renderNotes(judgeLine, time, parentProps);
+                
+                // 递归渲染子判定线的note
+                if (judgeLine.judgeLineList) {
+                    for (let i = 0; i < judgeLine.judgeLineList.length; i++) {
+                        this.renderNotesOnly(judgeLine.judgeLineList[i], time, props);
+                    }
+                }
+            }
+
+            renderNotes(judgeLine, time, parentProps = null) {
+                if (!judgeLine || !judgeLine.notes) return;
+                const judgeProps = this.getJudgeLinePropertiesWithParent(judgeLine, time, parentProps);
+                
+                for (let i = 0; i < judgeLine.notes.length; i++) {
+                    const note = judgeLine.notes[i];
+                    this.renderNote(note, judgeLine, time, parentProps);
+                }
+            }
+
+            shouldNoteBeVisible(note, judgeProps, time) {
+                // 基本可见性检查
                 const noteAlpha = note.alpha !== undefined ? note.alpha : 255;
                 if (noteAlpha <= 0) return false;
                 
                 const startTime = note.startTime || 0;
-                const timeToHit = startTime - time;
-                const visibleTime = note.visibleTime || 2;
+                const endTime = note.endTime || startTime;
                 
-                if (visibleTime < 75000) {
-                    if (timeToHit > visibleTime || timeToHit < -0.5) {
-                        return false;
-                    }
-                }
-                
-                if (note.endTime && time > note.endTime) {
+                // 检查时间范围
+                if (time < startTime - 2 || time > endTime + 0.5) {
                     return false;
                 }
                 
                 return true;
             }
 
-            // Note渲染 - 优化性能
-            renderNote(note, judgeLine, time) {
+            renderNote(note, judgeLine, time, parentProps = null) {
                 if (!note || !judgeLine) return;
-
-                const judgeProps = this.getJudgeLineProperties(judgeLine, time);
+                const judgeProps = this.getJudgeLinePropertiesWithParent(judgeLine, time, parentProps);
                 
-                if (!this.shouldNoteBeVisible(note, judgeProps, time)) {
-                    return;
-                }
-
-                // 检查是否为0速note
-                const isZeroSpeedNote = (note.speed <= 0) || (judgeProps.speed <= 0) || (note.visibleTime <= 0);
-                
-                if (isZeroSpeedNote) {
-                    this.renderZeroSpeedNote(note, judgeLine, time);
-                    return;
-                }
+                // 检查note是否应该显示
+                if (!this.shouldNoteBeVisible(note, judgeProps, time)) return;
 
                 const startTime = note.startTime || 0;
+                const endTime = note.endTime || startTime;
                 const timeToHit = startTime - time;
 
-                // 流速计算
-                const speed = (note.speed || 1) * judgeProps.speed * speedMultiplier * BASE_SPEED * 10;
+                const speed = (note.speed || 1) * (judgeProps.speed || 1) * speedMultiplier * BASE_SPEED * 10;
                 const distance = timeToHit * speed / 1000;
                 const above = note.above !== undefined ? note.above : 1;
                 const yOffset = note.yOffset || 0;
 
-                const noteY = judgeProps.y + (above === 1 ? distance : -distance) + yOffset;
-                const noteX = judgeProps.x + (note.positionX || 0);
-                const x = this.transformX(noteX);
-                const y = this.transformY(noteY);
-
-                this.ctx.save();
-                this.ctx.translate(x, y);
-                this.ctx.rotate(judgeProps.rotation * Math.PI / 180);
-
-                const alpha = note.alpha !== undefined ? note.alpha : 255;
-                this.ctx.globalAlpha = alpha / 255;
-
-                this.drawNote(note, judgeProps, time);
-
-                this.ctx.restore();
-            }
-
-            // 渲染0速note
-            renderZeroSpeedNote(note, judgeLine, time) {
-                if (!note || !judgeLine) return;
-
-                const judgeProps = this.getJudgeLineProperties(judgeLine, time);
+                let noteY, noteHeight;
+                const noteType = note.type || 1;
                 
-                if (!this.shouldNoteBeVisible(note, judgeProps, time)) {
-                    return;
+                if (noteType === 2 && note.endTime) {
+                    const holdDuration = endTime - startTime;
+                    const timeToEnd = endTime - time;
+                    
+                    if (time < startTime) {
+                        const headDistance = timeToHit * speed / 1000;
+                        const tailDistance = timeToEnd * speed / 1000;
+                        noteY = judgeProps.y + (above === 1 ? (headDistance + tailDistance) / 2 : -(headDistance + tailDistance) / 2) + yOffset;
+                        noteHeight = Math.abs(headDistance - tailDistance);
+                    } else if (time >= startTime && time <= endTime) {
+                        noteY = judgeProps.y + yOffset;
+                        const remainingDistance = timeToEnd * speed / 1000;
+                        noteHeight = remainingDistance;
+                    } else return;
+                } else {
+                    noteY = judgeProps.y + (above === 1 ? distance : -distance) + yOffset;
+                    noteHeight = 0;
                 }
 
                 const noteX = judgeProps.x + (note.positionX || 0);
-                const noteY = judgeProps.y;
                 const x = this.transformX(noteX);
                 const y = this.transformY(noteY);
 
                 this.ctx.save();
                 this.ctx.translate(x, y);
-                this.ctx.rotate(judgeProps.rotation * Math.PI / 180);
-
-                const alpha = note.alpha !== undefined ? note.alpha : 255;
-                this.ctx.globalAlpha = alpha / 255;
-
-                this.drawNote(note, judgeProps, time, true);
-
+                this.ctx.rotate((judgeProps.rotation + judgeProps.parentRotation) * Math.PI / 180);
+                const noteAlpha = note.alpha !== undefined ? note.alpha : 255;
+                
+                // 应用判定线透明度到note上
+                let finalAlpha = noteAlpha / 255;
+                if (judgeProps.alpha > 0) {
+                    finalAlpha *= (judgeProps.alpha / 255);
+                }
+                this.ctx.globalAlpha = Math.max(0, Math.min(1, finalAlpha));
+                
+                this.drawNote(note, noteHeight);
                 this.ctx.restore();
             }
 
-            // 绘制Note - 优化性能
-            drawNote(note, judgeProps, time, isZeroSpeed = false) {
+            drawNote(note, holdHeight = 0) {
                 const baseSize = this.noteSize * noteSizeFactor;
                 const size = (note.size || 1) * baseSize;
                 const noteType = note.type || 1;
-                const isDouble = note.isDouble || false;
-
+                const isDouble = note.isDouble === true || note.isDouble === 1;
                 const textureInfo = NOTE_TEXTURES[noteType];
                 const textureName = textureInfo ? (isDouble ? textureInfo.double : textureInfo.single) : 'Tap.png';
                 const texture = noteTextures[textureName];
 
                 if (texture && texture.complete) {
                     const aspectRatio = texture.width / texture.height;
-                    let width = size;
-                    let height = size;
-                    
-                    if (aspectRatio > 1) {
-                        height = size / aspectRatio;
-                    } else {
-                        width = size * aspectRatio;
-                    }
-                    
-                    if (noteType === 2) {
-                        width *= 2;
-                        height /= 4;
-                    }
-                    
+                    let width = size, height = size;
+                    if (aspectRatio > 1) height = size / aspectRatio; else width = size * aspectRatio;
+                    if (noteType === 2) { width *= 2; height = holdHeight > 0 ? Math.max(holdHeight, height / 4) : height / 4; }
                     this.ctx.drawImage(texture, -width/2, -height/2, width, height);
                 } else {
                     const tint = note.tint || [255, 255, 255];
                     this.ctx.fillStyle = `rgb(${tint[0]}, ${tint[1]}, ${tint[2]})`;
-                    
                     switch(noteType) {
                         case 1: this.ctx.fillRect(-size/2, -size/2, size, size); break;
-                        case 2: this.ctx.fillRect(-size, -size/8, size*2, size/4); break;
+                        case 2: 
+                            const holdWidth = size * 2;
+                            const holdH = holdHeight > 0 ? Math.max(holdHeight, size/4) : size/4;
+                            this.ctx.fillRect(-holdWidth/2, -holdH/2, holdWidth, holdH);
+                            break;
                         case 3: 
                             this.ctx.beginPath();
                             this.ctx.arc(0, 0, size/2, 0, Math.PI * 2);
@@ -482,63 +428,57 @@
                 }
             }
 
-            // 主渲染循环 - 优化性能
             render(time) {
-                const now = Date.now();
-                if (now - lastRenderTime < frameInterval) return;
-                lastRenderTime = now;
-
-                // 清空画布
                 this.ctx.fillStyle = '#2a2d3e';
                 this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
                 if (!this.chartData || !this.chartData.judgeLineList) return;
 
                 try {
-                    // 按zOrder排序
+                    hitNoteCount = 0;
                     const judgeLines = [...this.chartData.judgeLineList]
-                        .map((line, index) => ({ line, index }))
-                        .sort((a, b) => {
-                            const zOrderA = a.line.zOrder || 0;
-                            const zOrderB = b.line.zOrder || 0;
-                            if (zOrderA !== zOrderB) return zOrderA - zOrderB;
-                            return a.index - b.index;
-                        })
+                        .map((line, index) => ({ line, zOrder: line.zOrder || 0, index }))
+                        .sort((a, b) => a.zOrder - b.zOrder || a.index - b.index)
                         .map(item => item.line);
 
-                    // 渲染判定线
-                    for (const judgeLine of judgeLines) {
-                        this.renderJudgeLine(judgeLine, time);
-                    }
-
-                    // 收集所有音符
-                    const allNotes = [];
-                    for (const judgeLine of judgeLines) {
-                        if (judgeLine.notes) {
-                            for (const note of judgeLine.notes) {
-                                allNotes.push({ note, judgeLine });
+                    // 先统计已过线的note数量
+                    const countHitNotes = (judgeLine, parentProps = null) => {
+                        if (!judgeLine || !judgeLine.notes) return;
+                        const judgeProps = this.getJudgeLinePropertiesWithParent(judgeLine, time, parentProps);
+                        
+                        for (let i = 0; i < judgeLine.notes.length; i++) {
+                            const note = judgeLine.notes[i];
+                            const startTime = note.startTime || 0;
+                            if (time >= startTime) {
+                                const isFake = note.isFake === true || note.isFake === 1;
+                                if (!isFake) hitNoteCount++;
                             }
                         }
-                    }
-                    allNotes.sort((a, b) => (a.note.zIndex || 0) - (b.note.zIndex || 0));
+                        
+                        if (judgeLine.judgeLineList) {
+                            for (let i = 0; i < judgeLine.judgeLineList.length; i++) {
+                                const childProps = this.getJudgeLinePropertiesWithParent(judgeLine.judgeLineList[i], time, parentProps);
+                                countHitNotes(judgeLine.judgeLineList[i], childProps);
+                            }
+                        }
+                    };
 
-                    // 渲染音符
-                    for (const { note, judgeLine } of allNotes) {
-                        this.renderNote(note, judgeLine, time);
+                    for (let i = 0; i < judgeLines.length; i++) {
+                        countHitNotes(judgeLines[i]);
                     }
 
+                    document.getElementById('hitNoteDisplay').textContent = `已过线Note: ${hitNoteCount}`;
+
+                    // 渲染所有判定线和note
+                    for (let i = 0; i < judgeLines.length; i++) {
+                        this.renderJudgeLine(judgeLines[i], time);
+                    }
                 } catch (error) {
                     console.error('渲染错误:', error);
                 }
             }
 
-            setChartData(chartData) {
-                this.chartData = chartData;
-            }
-
-            setNoteSize(factor) {
-                this.noteSize = 75 * factor * 2;
-            }
+            setChartData(chartData) { this.chartData = chartData; }
+            setNoteSize(factor) { this.noteSize = 75 * factor * 2; }
         }
 
         // 工具函数
@@ -549,24 +489,18 @@
 
         function beat2sec(BPMList, beat, bpmfactor = 1) {
             if (!BPMList) return 0;
-            
             let targetBeat = beatToValue(beat);
-            let sec = 0;
-            let remainingBeat = targetBeat;
-            
+            let sec = 0, remainingBeat = targetBeat;
             for (let i = 0; i < BPMList.length; i++) {
                 const bpm = BPMList[i];
                 if (!bpm || typeof bpm.bpm !== 'number') continue;
-                
                 const bpmValue = bpm.bpm / bpmfactor;
                 const currentStart = beatToValue(bpm.startTime || [0, 0, 1]);
-                
                 if (i < BPMList.length - 1) {
                     const nextBPM = BPMList[i + 1];
                     if (!nextBPM) continue;
                     const nextStart = beatToValue(nextBPM.startTime || [0, 0, 1]);
                     const segmentLength = nextStart - currentStart;
-                    
                     if (remainingBeat > segmentLength) {
                         sec += segmentLength * (60 / bpmValue);
                         remainingBeat -= segmentLength;
@@ -585,13 +519,10 @@
 
         function allbeat2sec(rpeData) {
             if (!rpeData) return rpeData;
-            
             try {
                 const result = JSON.parse(JSON.stringify(rpeData));
-                
                 function processObject(obj) {
                     if (!obj || typeof obj !== 'object') return;
-                    
                     for (let key in obj) {
                         if (obj.hasOwnProperty(key)) {
                             if ((key === "startTime" || key === "endTime") && Array.isArray(obj[key])) {
@@ -602,13 +533,11 @@
                         }
                     }
                 }
-                
                 for (let key in result) {
                     if (key !== "BPMList" && typeof result[key] === "object") {
                         processObject(result[key]);
                     }
                 }
-                
                 return result;
             } catch (error) {
                 console.error("谱面时间转换错误:", error);
@@ -623,106 +552,91 @@
             return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;
         }
 
-        // 预加载材质
+        function retryLoadTexture(url, textureName, isJudgeLine = false) {
+            const img = new Image();
+            if (isJudgeLine) judgeLineTextures[textureName] = img;
+            else noteTextures[textureName] = img;
+            img.onload = () => console.log(`材质加载成功: ${textureName}`);
+            img.onerror = () => console.warn(`材质加载失败: ${textureName}`);
+            img.src = url;
+        }
+
         function preloadTextures() {
-            const texturePromises = [];
-            
             for (const [type, textures] of Object.entries(NOTE_TEXTURES)) {
                 for (const [key, filename] of Object.entries(textures)) {
-                    const img = new Image();
-                    noteTextures[filename] = img;
-                    
-                    texturePromises.push(new Promise((resolve) => {
-                        img.onload = resolve;
-                        img.onerror = () => {
-                            console.warn(`无法加载Note材质: ${filename}`);
-                            resolve();
-                        };
-                        img.src = `./assets/${filename}`;
-                    }));
+                    retryLoadTexture(`./assets/${filename}`, filename, false);
                 }
             }
-            
-            return Promise.all(texturePromises);
         }
 
-        // 从ZIP加载判定线材质
         async function loadJudgeLineTexturesFromZip() {
-            const texturePromises = [];
-            
             for (const [path, url] of Object.entries(ChartJSON)) {
                 if (path.match(/\.(png|jpg|jpeg|gif|bmp|webp)$/i)) {
-                    const img = new Image();
-                    judgeLineTextures[path] = img;
-                    
-                    texturePromises.push(new Promise((resolve) => {
-                        img.onload = resolve;
-                        img.onerror = () => {
-                            if (path !== 'line.png') {
-                                console.warn(`无法加载判定线材质: ${path}`);
-                            }
-                            resolve();
-                        };
-                        img.src = url;
-                    }));
+                    retryLoadTexture(url, path, true);
                 }
             }
-            
-            return Promise.all(texturePromises);
         }
 
-        // 音频控制
         function setupAudio(songFile) {
             if (audioElement) {
                 audioElement.pause();
                 audioElement = null;
             }
-            
             if (songFile && ChartJSON[songFile]) {
                 audioElement = document.getElementById('audioControl');
                 audioElement.src = ChartJSON[songFile];
                 audioElement.load();
-                
-                audioElement.addEventListener('canplaythrough', () => {
-                    console.log('音频加载完成');
-                });
-                
-                audioElement.addEventListener('error', (e) => {
-                    console.error('音频加载失败:', e);
+                audioElement.addEventListener('timeupdate', function() {
+                    if (isRunning && audioElement) {
+                        currentTime = audioElement.currentTime;
+                        elapsedTime = currentTime * 1000;
+                        startTime = Date.now() - elapsedTime;
+                        document.getElementById('timeDisplay').textContent = formatTime(currentTime);
+                    }
                 });
             }
         }
 
-        // 控制函数
         function init() {
             const canvas = document.getElementById('player');
             if (!canvas) return;
-            
             renderer = new PhigrosRenderer(canvas);
-            console.log("播放器初始化完成");
+            isInitialized = true;
         }
 
         function start() {
-            if (!chartContent) {
-                alert("请先加载谱面文件");
-                return;
-            }
-
+            if (!isInitialized) init();
+            if (!chartContent) { alert("请先加载谱面文件"); return; }
+            
             try {
-                const chartData = JSON.parse(chartContent);
-                const convertedData = allbeat2sec(chartData);
-                
-                if (renderer) {
-                    renderer.setChartData(convertedData);
-                    renderer.setNoteSize(noteSizeFactor);
+                if (!chartData) {
+                    chartData = JSON.parse(chartContent);
+                    const convertedData = allbeat2sec(chartData);
+                    if (renderer) {
+                        renderer.setChartData(convertedData);
+                        renderer.setNoteSize(noteSizeFactor);
+                    }
                 }
                 
                 if (!isRunning) {
                     isRunning = true;
                     startTime = Date.now() - elapsedTime;
-                    lastRenderTime = Date.now();
                     
-                    // 播放音频
+                    // 直接开始动画循环
+                    function animate() {
+                        if (!isRunning) return;
+                        const now = Date.now();
+                        elapsedTime = now - startTime;
+                        currentTime = elapsedTime / 1000;
+                        document.getElementById('timeDisplay').textContent = formatTime(currentTime);
+                        if (renderer) renderer.render(currentTime);
+                        animationFrameId = requestAnimationFrame(animate);
+                    }
+                    
+                    // 开始动画
+                    animate();
+                    
+                    // 尝试播放音频
                     if (audioFile) {
                         setupAudio(audioFile);
                         if (audioElement) {
@@ -733,28 +647,7 @@
                         }
                     }
                     
-                    function animate() {
-                        if (!isRunning) return;
-                        
-                        const now = Date.now();
-                        elapsedTime = now - startTime;
-                        currentTime = elapsedTime / 1000;
-                        
-                        document.getElementById('timeDisplay').textContent = formatTime(currentTime);
-                        
-                        if (renderer) {
-                            renderer.render(currentTime);
-                        }
-                        
-                        // 同步音频
-                        if (audioElement && Math.abs(audioElement.currentTime - currentTime) > 0.1) {
-                            audioElement.currentTime = currentTime;
-                        }
-                        
-                        animationFrameId = requestAnimationFrame(animate);
-                    }
-                    
-                    animate();
+                    document.getElementById('pauseBtn').textContent = "暂停";
                 }
             } catch (e) {
                 console.error("解析JSON失败:", e);
@@ -766,37 +659,22 @@
             const pauseBtn = document.getElementById('pauseBtn');
             if (isRunning) {
                 isRunning = false;
-                if (animationFrameId) {
-                    cancelAnimationFrame(animationFrameId);
-                    animationFrameId = null;
-                }
-                if (audioElement) {
-                    audioElement.pause();
-                }
+                if (animationFrameId) cancelAnimationFrame(animationFrameId);
+                if (audioElement) audioElement.pause();
                 elapsedTime = Date.now() - startTime;
                 pauseBtn.textContent = "继续";
             } else {
                 isRunning = true;
                 startTime = Date.now() - elapsedTime;
-                if (audioElement) {
-                    audioElement.play().catch(e => {
-                        console.warn('音频播放失败:', e);
-                    });
-                }
+                if (audioElement) audioElement.play().catch(e => console.warn('音频播放失败:', e));
                 pauseBtn.textContent = "暂停";
                 requestAnimationFrame(function animate() {
                     if (!isRunning) return;
-                    
                     const now = Date.now();
                     elapsedTime = now - startTime;
                     currentTime = elapsedTime / 1000;
-                    
                     document.getElementById('timeDisplay').textContent = formatTime(currentTime);
-                    
-                    if (renderer) {
-                        renderer.render(currentTime);
-                    }
-                    
+                    if (renderer) renderer.render(currentTime);
                     animationFrameId = requestAnimationFrame(animate);
                 });
             }
@@ -804,57 +682,37 @@
 
         function reset() {
             isRunning = false;
-            if (animationFrameId) {
-                cancelAnimationFrame(animationFrameId);
-                animationFrameId = null;
-            }
-            if (audioElement) {
-                audioElement.pause();
-                audioElement.currentTime = 0;
-            }
-            elapsedTime = 0;
-            currentTime = 0;
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            if (audioElement) { audioElement.pause(); audioElement.currentTime = 0; }
+            elapsedTime = 0; currentTime = 0; hitNoteCount = 0;
             document.getElementById('timeDisplay').textContent = "00:00.000";
+            document.getElementById('hitNoteDisplay').textContent = "已过线Note: 0";
             document.getElementById('pauseBtn').textContent = "暂停";
-            
-            if (renderer && chartContent) {
+            if (renderer && chartData) {
                 try {
-                    const chartData = JSON.parse(chartContent);
                     const convertedData = allbeat2sec(chartData);
                     renderer.setChartData(convertedData);
                     renderer.render(0);
-                } catch (e) {
-                    console.error("重置失败:", e);
-                }
+                } catch (e) { console.error("重置失败:", e); }
             }
         }
 
         function exIt() {
             isRunning = false;
-            if (animationFrameId) {
-                cancelAnimationFrame(animationFrameId);
-                animationFrameId = null;
-            }
-            if (audioElement) {
-                audioElement.pause();
-                audioElement = null;
-            }
-            elapsedTime = 0;
-            currentTime = 0;
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            if (audioElement) { audioElement.pause(); audioElement = null; }
+            elapsedTime = 0; currentTime = 0; hitNoteCount = 0;
+            chartData = null;
             document.getElementById('timeDisplay').textContent = "00:00.000";
+            document.getElementById('hitNoteDisplay').textContent = "已过线Note: 0";
             document.getElementById('pauseBtn').textContent = "暂停";
-            
-            if (renderer) {
-                renderer.setChartData(null);
-                renderer.render(0);
-            }
+            if (renderer) { renderer.setChartData(null); renderer.render(0); }
         }
 
         function toggleFullscreen() {
             const container = document.getElementById('playerContainer');
             const canvas = document.getElementById('player');
             const fullscreenBtn = document.getElementById('fullscreenBtn');
-            
             if (!document.fullscreenElement) {
                 container.requestFullscreen().then(() => {
                     fullscreenBtn.style.display = 'none';
@@ -870,24 +728,13 @@
             }
         }
 
-        // 文件处理
         async function handleZipFile(file) {
-            if (!file) {
-                alert("请选择有效的ZIP文件");
-                return;
-            }
-            
-            if (typeof JSZip === 'undefined') {
-                alert("JSZip库未加载");
-                return;
-            }
-            
+            if (!file) { alert("请选择有效的ZIP文件"); return; }
+            if (typeof JSZip === 'undefined') { alert("JSZip库未加载"); return; }
             try {
                 document.getElementById('loading').classList.remove('hidden');
-                
                 const zip = new JSZip();
                 const contents = await zip.loadAsync(file);
-                
                 const promises = [];
                 contents.forEach((path, entry) => {
                     if (!entry.dir) {
@@ -896,12 +743,9 @@
                         }));
                     }
                 });
-                
                 await Promise.all(promises);
-                
                 await loadJudgeLineTexturesFromZip();
                 await InfoRequest();
-                
             } catch (err) {
                 console.error("ZIP文件处理失败:", err);
                 alert("ZIP文件处理失败");
@@ -915,33 +759,23 @@
                 try {
                     const response = await fetch(ChartJSON['info.txt']);
                     const text = await response.text();
-                    
                     const chartInfo = {};
                     const lines = text.split('\n');
-                    
                     for (const line of lines) {
-                        if (line.startsWith('#')) continue; // 跳过注释
+                        if (line.startsWith('#')) continue;
                         const match = line.match(/(\w+):\s*(.+)/);
                         if (match) {
                             const key = match[1].trim();
                             const value = match[2].trim();
                             chartInfo[key] = value;
-                            
-                            // 检测音频文件
-                            if (key.toLowerCase() === 'song') {
-                                audioFile = value;
-                                console.log('检测到音频文件:', audioFile);
-                            }
+                            if (key.toLowerCase() === 'song') audioFile = value;
                         }
                     }
-                    
                     document.getElementById('chartName').value = chartInfo.Name || '';
                     document.getElementById('chartDifficulty').value = chartInfo.Level || '';
-                    
                     if (chartInfo.Chart && ChartJSON[chartInfo.Chart]) {
                         const chartResponse = await fetch(ChartJSON[chartInfo.Chart]);
                         chartContent = await chartResponse.text();
-                        console.log("谱面文件加载完成");
                     }
                 } catch (err) {
                     console.error("加载谱面信息失败:", err);
@@ -951,45 +785,23 @@
 
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
-            // 预加载材质
-            preloadTextures().then(() => {
-                console.log("材质预加载完成");
-            });
-
-            // 流速控制
-            const speedControl = document.getElementById('speedControl');
-            const speedValue = document.getElementById('speedValue');
-            speedControl.addEventListener('input', function() {
+            preloadTextures();
+            document.getElementById('speedControl').addEventListener('input', function() {
                 speedMultiplier = parseFloat(this.value);
-                speedValue.textContent = speedMultiplier.toFixed(1);
+                document.getElementById('speedValue').textContent = speedMultiplier.toFixed(1);
             });
-            
-            // Note大小控制
-            const noteSizeControl = document.getElementById('noteSizeControl');
-            const noteSizeValue = document.getElementById('noteSizeValue');
-            noteSizeControl.addEventListener('input', function() {
+            document.getElementById('noteSizeControl').addEventListener('input', function() {
                 noteSizeFactor = parseFloat(this.value) / 100;
-                noteSizeValue.textContent = this.value + '%';
-                if (renderer) {
-                    renderer.setNoteSize(noteSizeFactor);
-                }
+                document.getElementById('noteSizeValue').textContent = this.value + '%';
+                if (renderer) renderer.setNoteSize(noteSizeFactor);
             });
-            
-            // 文件选择
-            const zipFileInput = document.getElementById('zipFile');
-            zipFileInput.addEventListener('change', function(event) {
+            document.getElementById('zipFile').addEventListener('change', function(event) {
                 const file = event.target.files[0];
-                if (file) {
-                    handleZipFile(file);
-                }
+                if (file) handleZipFile(file);
             });
-            
-            // 初始化播放器
             init();
         });
-
     </script>
     <script src="js/jszip.min.js"></script>
 </body>
-
 </html>
